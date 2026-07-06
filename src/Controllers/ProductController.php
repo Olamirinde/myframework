@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Http\Response;
 use App\Models\Product;
 use App\Models\Category;
+use App\Models\StockMovement;
 use App\Exceptions\ThrowException;
 
 class ProductController
@@ -78,6 +79,108 @@ class ProductController
         return new Response(200, ['message' => 'Product updated']);
     }
 
+    public function restock($request, $id)
+    {
+        if (!is_numeric($id)) {
+            throw ThrowException::validation(['id' => 'ID must be numeric']);
+        }
+
+        $product = Product::find($id);
+
+        if (!$product) {
+            throw ThrowException::notFound('Product not found');
+        }
+
+        $body = $request->body;
+        $quantity  = $body['quantity'] ?? null;
+
+        if (!$quantity || !is_numeric($quantity) || $quantity <= 0) {
+            throw ThrowException::validation(['quantity' => 'Quantity must be a positive number']);
+        }
+
+        $before = $product['quantity'];
+        $after  = $before + $quantity;
+
+        Product::update($id, ['quantity' => $after]);
+
+        StockMovement::create([
+            'product_id'       => $id,
+            'quantity'         => $quantity,
+            'current_quantity' => $after,
+            'is_going_in'      => 1,
+            'reason'           => $body['reason'] ?? 'Restock',
+            'status_id'        => 1,
+        ]);
+
+        return new Response(200, [
+            'message'          => 'Stock restocked',
+            'quantity_before'  => $before,
+            'quantity_after'   => $after,
+        ]);
+    }
+
+    public function deduct($request, $id)
+    {
+        if (!is_numeric($id)) {
+            throw ThrowException::validation(['id' => 'ID must be numeric']);
+        }
+
+        $product = Product::find($id);
+
+        if (!$product) {
+            throw ThrowException::notFound('Product not found');
+        }
+
+        $body = $request->body;
+        $quantity  = $body['quantity'] ?? null;
+
+        if (!$quantity || !is_numeric($quantity) || $quantity <= 0) {
+            throw ThrowException::validation(['quantity' => 'Quantity must be a positive number']);
+        }
+
+        $before = $product['quantity'];
+
+        if ($quantity > $before) {
+            throw ThrowException::validation(['quantity' => 'Insufficient stock. Available: ' . $before]);
+        }
+
+        $after = $before - $quantity;
+
+        Product::update($id, ['quantity' => $after]);
+
+        StockMovement::create([
+            'product_id'       => $id,
+            'quantity'         => $quantity,
+            'current_quantity' => $after,
+            'is_going_in'      => 0,
+            'reason'           => $body['reason'] ?? 'Deduction',
+            'status_id'        => 1,
+        ]);
+
+        return new Response(200, [
+            'message'         => 'Stock deducted',
+            'quantity_before' => $before,
+            'quantity_after'  => $after,
+        ]);
+    }
+
+    public function movements($request, $id)
+    {
+        if (!is_numeric($id)) {
+            throw ThrowException::validation(['id' => 'ID must be numeric']);
+        }
+
+        $product = Product::find($id);
+
+        if (!$product) {
+            throw ThrowException::notFound('Product not found');
+        }
+
+        $movements = StockMovement::getByProduct($id);
+
+        return new Response(200, $movements);
+    }
+
     public function getCategories($request, $id)
     {
         if (!is_numeric($id)) {
@@ -90,9 +193,7 @@ class ProductController
             throw ThrowException::notFound('Product not found');
         }
 
-        $categories = Product::categories($id);
-
-        return new Response(200, $categories);
+        return new Response(200, Product::categories($id));
     }
 
     public function syncCategories($request, $id)
@@ -113,7 +214,6 @@ class ProductController
             throw ThrowException::validation(['category_ids' => 'category_ids must be a non-empty array']);
         }
 
-        // Confirm every category_id actually exists
         foreach ($categoryIds as $categoryId) {
             if (!Category::find($categoryId)) {
                 throw ThrowException::validation(['category_ids' => "Category {$categoryId} does not exist"]);
